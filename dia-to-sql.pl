@@ -11,7 +11,7 @@ binmode STDOUT, ':encoding(UTF-8)';
 my (%schema, %references, %context);
 &parse(shift or die "Por favor, especifica el archivo a procesar\n");
 undef %context;
-my (%tables, %relations);
+my (%tables, %relations, %comments);
 &classify;
 undef %references;
 &sql;
@@ -22,6 +22,7 @@ exit 0;
 
 sub sql {
    for my $table (keys %tables) {
+      print "/**\n * $comments{$table}\n **/\n" if $comments{$table};
       print "drop table if exists $table;\n\n";
       print "create table $table (\n";
       my @columns = @{$tables{$table}};
@@ -34,15 +35,27 @@ sub sql {
          } else {
             print " not null" if $column->{null} eq 'false';
             print " unique" if $column->{unique} eq 'true';
-            my $reference = $relations{$table}{$name};
-            print " references $reference->{table} ($reference->{column})" if $reference;
          }
-         print ',' if ++$index < scalar @columns; 
+         print ',' if ++$index < scalar @columns;
+         print " -- $column->{comment}" if $column->{comment};
          print "\n";
       }
       print ');';
       print "\n\n"; # unless last;
    }
+   for my $table (keys %relations) {
+      my @columns = @{$tables{$table}};
+      my $index = 0;
+      for my $column (@columns) {
+         my $colname = $column->{name};
+         my $reference = $relations{$table}{$colname};
+         if ($reference) {
+            print "ALTER TABLE $table WITH CHECK ADD FOREIGN KEY($colname)\n";
+            print "   REFERENCES $reference->{table} ($reference->{column});\n";
+         }
+      }
+   }
+   print "\n\n"; # unless last;
 }
 
 sub classify {
@@ -53,10 +66,11 @@ sub classify {
       my $table = $node{name};
       $tables{$table} = $node{columns};
       $boxes{$table} = $node{box};
+      $comments{$table} = $node{comment};
    }
-   
+
    undef %schema;
-   
+
    for my $id (keys %references) {
       my %node = %{$references{$id}};
       my @points = @{$node{points}};
@@ -65,18 +79,19 @@ sub classify {
       my $from = $node{1};
       my $to = $node{0};
       my ($source, $target);
-   
+
       $source = $tables{$from}[$_ - 1]{name} if $_ = &inner($start, $boxes{$from}, scalar @{$tables{$from}});
       $source = $tables{$from}[$_ - 1]{name} if $_ = &inner($end, $boxes{$from}, scalar @{$tables{$from}});
       $target = $tables{$to}[$_ - 1]{name} if $_ = &inner($start, $boxes{$to}, scalar @{$tables{$to}});
       $target = $tables{$to}[$_ - 1]{name} if $_ = &inner($end, $boxes{$to}, scalar @{$tables{$to}});
-   
+      warn "no encontre origen o destino de la relacion [$source] <-> [$target]\n" if not $source or not $target;
+
       $relations{$from}{$source}{table} = $to;
       $relations{$from}{$source}{column} = $target;
    }
-   
+
    undef %boxes;
-   
+
    sub inner {
       my (%point, %box, $start, $end, $count);
       ($point{x}, $point{y}) = split /,/, shift;
@@ -84,7 +99,7 @@ sub classify {
       ($box{start}{x}, $box{start}{y}) = split /,/, $start;
       ($box{end}{x}, $box{end}{y}) = split /,/, $end;
       $count = shift;
-   
+
       return 0 if $point{y} eq $box{start}{y} or $point{y} eq $box{end}{y};
 
       if ($point{x} eq $box{start}{x} or $point{x} eq $box{end}{x}) {
@@ -92,7 +107,7 @@ sub classify {
          $_ = ceil(($point{y} - ($box{start}{y} + $height)) / $height);
          return ceil(($point{y} - ($box{start}{y} + $height)) / $height);
       }
-   
+
       return 0;
    }
 }
